@@ -1,13 +1,6 @@
-#include <pcap.h>
-#include <stdio.h>
 #include "ethhdr.h"
-#include "arphdr.h"     
-#include <sys/types.h>
-#include <ifaddrs.h>
-#include <netinet/in.h> 
-#include <string.h> 
-#include <arpa/inet.h>
-#include <linux/if_packet.h>
+#include "arphdr.h"
+#include "stdafx.h"
 
 #define IFNAMSIZ 16
 
@@ -28,6 +21,15 @@ void usage() {
 	printf("sample: send-arp wlan0 192.168.10.2 192.168.10.1\n");
 }
 
+void log (char *msg, ...) {
+	time_t now = time(0);
+	va_list ap;
+	va_start(ap, msg);
+	fprintf(stderr, "%ld: ", now);
+	vfprintf(stderr, msg, ap);
+	fprintf(stderr, "\n");
+}
+
 uint8_t* _pcap_next(pcap_t* pcap) {
   pcap_pkthdr *pkt_header;
   const uint8_t *pkt_data;
@@ -43,7 +45,15 @@ uint8_t* _pcap_next(pcap_t* pcap) {
 }
 
 EthArpPacket* pcap_next_arp(pcap_t* pcap, Ip target_ip) {
-	for (;;) {
+	time_t started_at = time(0);
+
+	for (int i =0;; i++) {
+		time_t now = time(0);
+		if (now > started_at + 2) {
+    		fprintf(stderr, "reply timeout reached\n");
+			exit(-1);
+		}
+
 		EthArpPacket *pkt = (EthArpPacket*) _pcap_next(pcap);
 		if (pkt == NULL) continue;
 
@@ -79,17 +89,19 @@ Addresses get_my_addr (char* dev) {
         if (ifa->ifa_addr->sa_family == AF_INET) {
 			char str[INET_ADDRSTRLEN];
 			inet_ntop(AF_INET, &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr, str, INET_ADDRSTRLEN);
+			log("My ip address found: %s", str);
             ip = Ip(str);
         } else if (ifa->ifa_addr->sa_family == AF_PACKET) {
 			sockaddr_ll *s = (sockaddr_ll*)ifa->ifa_addr;
             int i;
             int len = 0;
 
-			char macp[INET6_ADDRSTRLEN];
+			char str[INET6_ADDRSTRLEN];
             for(i = 0; i < 6; i++)
-                len+=sprintf(macp+len,"%02X%s",s->sll_addr[i],i < 5 ? ":":"");
+                len+=sprintf(str+len,"%02X%s",s->sll_addr[i],i < 5 ? ":":"");
 			
-			mac = Mac(macp);
+			log("My mac address found: %s", str);
+			mac = Mac(str);
         } 
     }
 
@@ -147,10 +159,14 @@ int main(int argc, char** argv) {
 		Ip sender_ip = Ip(argv[++i]);
 		Ip target_ip = Ip(argv[++i]);
 
-		Mac sender_mac = arp_query(handle, my_info.mac, my_info.ip, sender_ip);
-		arp_send(handle, ArpHdr::Reply, my_info.mac, sender_mac, sender_mac, target_ip, sender_ip);
+		log("Querying mac address of %s...", ((std::string)sender_ip).c_str());
 
-		printf("sent!\n");
+		Mac sender_mac = arp_query(handle, my_info.mac, my_info.ip, sender_ip);
+
+		log("%s's mac address found: %s", ((std::string)sender_ip).c_str(), ((std::string)sender_mac).c_str());
+		
+		arp_send(handle, ArpHdr::Reply, my_info.mac, sender_mac, sender_mac, target_ip, sender_ip);
+		log("Sent fake arp reply to %s", ((std::string)sender_ip).c_str());
 	}
 	
 	pcap_close(handle);
